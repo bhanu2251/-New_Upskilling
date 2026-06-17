@@ -4,7 +4,7 @@
 -- Key filters:
 --   VOID = FALSE       → excludes voided transactions (critical - must never appear in financials)
 --   POSTING = TRUE     → only transactions that create GL entries
--- Key fields: TYPE, TRANDATE, POSTINGPERIOD, SUBSIDIARY, STATUS, TRANID
+-- Key fields: TYPE, TRANDATE, POSTINGPERIOD, TOSUBSIDIARY, STATUS, TRANID
 
 {{ config(
     materialized='table',
@@ -19,7 +19,7 @@ select
     cast(t.trandate as date)                        as transaction_date,
     t.postingperiod                                 as posting_period_id,
     t.entity                                        as entity_id,
-    t.subsidiary                                    as subsidiary_id,
+    t.tosubsidiary                                  as subsidiary_id,  -- fixed: was t.subsidiary
     t.status                                        as status_code,
     ts.status_name                                  as status_name,
     ts.status_full_name                             as status_full_name,

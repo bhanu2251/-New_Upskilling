@@ -1,7 +1,8 @@
 -- Model: silver_location
--- Description: Cleaned location master from Bronze RAW.LOCATION
+-- Description: Cleaned location master from Bronze RAW.Location
 -- Grain: One row per location (unique LOCATION.ID)
 -- Key fields: PARENT (location hierarchy), SUBSIDIARY, LOCATIONTYPE
+-- Note: Source table is 'Location' (mixed case) in Snowflake RAW schema
 
 {{ config(
     materialized='table',
@@ -20,5 +21,5 @@ select
 
     _fivetran_synced                                as fivetran_synced_at
 
-from {{ source('raw', 'LOCATION') }}
+from {{ source('raw', 'Location') }}   -- mixed case as it exists in Snowflake
 where isinactive = false

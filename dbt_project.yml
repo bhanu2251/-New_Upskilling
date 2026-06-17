@@ -49,6 +49,3 @@ models:
       +materialized: table
       +schema: GOLD
 
-    example:                    # keep until you delete the folder
-      +materialized: table
-      +schema: RAW

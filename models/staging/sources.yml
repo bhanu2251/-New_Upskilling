@@ -15,8 +15,9 @@ sources:
       - name: SUBSIDIARY
       - name: DEPARTMENT
       - name: CLASSIFICATION
-      - name: Location           # mixed case - exactly as it exists in Snowflake RAW
-        identifier: Location     # locks exact table name sent to Snowflake
+      - name: Location
+        quoting:
+          identifier: true     # ← forces dbt to send "Location" not "LOCATION"
       - name: ENTITY
       - name: TRANSACTIONSTATUS
       - name: ITEM

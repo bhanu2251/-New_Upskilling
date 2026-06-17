@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  - name: raw
+    database: BUI_BHANU_RAMIREDDY_DB
+    schema: RAW
+    tables:
+      - name: TRANSACTIONACCOUNTINGLINE
+      - name: TRANSACTION
+      - name: TRANSACTIONLINE
+      - name: ACCOUNT
+      - name: ACCOUNTINGPERIOD
+      - name: CONSOLIDATEDEXCHANGERATE
+      - name: CURRENCY
+      - name: SUBSIDIARY
+      - name: DEPARTMENT
+      - name: CLASSIFICATION
+      - name: LOCATION
+      - name: ENTITY
+      - name: TRANSACTIONSTATUS
+      - name: ITEM
+      - name: EMPLOYEE

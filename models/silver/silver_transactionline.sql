@@ -40,4 +40,3 @@ inner join {{ ref('silver_transaction') }} t
 
 where tl.mainline = false
   and tl.taxline  = false
-  and tl._fivetran_deleted = false

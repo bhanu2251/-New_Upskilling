@@ -20,7 +20,9 @@ select
     tl.entity                                       as entity_id,
     tl.subsidiary                                   as subsidiary_id,
     cast(tl.foreignamount as number(38, 2))         as foreign_amount,
-    cast(tl.amount as number(38, 2))                as amount,
+    cast(tl.creditforeignamount as number(38, 2))   as credit_foreign_amount,
+    cast(tl.debitforeignamount as number(38, 2))    as debit_foreign_amount,
+    cast(tl.netamount as number(38, 2))             as net_amount,
     tl.memo                                         as line_memo,
     tl.mainline                                     as is_mainline,
     tl.iscogs                                       as is_cogs,
@@ -29,8 +31,6 @@ select
     tl.item                                         as item_id,
     tl.itemtype                                     as item_type,
     tl.eliminate                                    as eliminate,
-    cast(tl.netamount as number(38, 2))             as net_amount,
-
     tl._fivetran_synced                             as fivetran_synced_at
 
 from {{ source('raw', 'TRANSACTIONLINE') }} tl

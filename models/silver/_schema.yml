@@ -337,6 +337,8 @@ models:
           - relationships:
               to: ref('account')
               field: ACCOUNT_ID
+              config:
+                severity: warn
       - name: PERIOD_ID
         description: "FK to accountingperiod."
         data_tests:

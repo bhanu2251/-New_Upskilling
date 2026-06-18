@@ -25,7 +25,7 @@
 
 WITH gl_source AS (
 
-    SELECT * FROM {{ source('silver', 'transactionaccountingline') }}
+    SELECT * SELECT * FROM {{ ref('transactionaccountingline') }}
     {% if is_incremental() %}
     WHERE SILVER_UPDATED_ON_TS_UTC > (SELECT MAX(DW_UPDATED_AT) FROM {{ this }})
     {% endif %}

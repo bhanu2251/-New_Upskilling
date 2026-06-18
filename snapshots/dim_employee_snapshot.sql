@@ -34,6 +34,6 @@ SELECT
     CURRENT_TIMESTAMP()   AS DW_UPDATED_AT,
     'NETSUITE'            AS DW_SOURCE_SYSTEM,
     '{{ invocation_id }}' AS DW_BATCH_ID
-FROM {{ source('silver', 'employee') }}
+FROM {{ ref('employee') }}
 
 {% endsnapshot %}

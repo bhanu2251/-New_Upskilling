@@ -19,7 +19,7 @@
 
 WITH source AS (
 
-    SELECT * FROM {{ source('silver', 'subsidiary') }}
+    SELECT * FROM {{ ref('subsidiary') }}
 
 ),
 

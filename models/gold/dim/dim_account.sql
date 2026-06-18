@@ -20,7 +20,7 @@
 
 WITH source AS (
 
-    SELECT * FROM {{ source('silver', 'account') }}
+    SELECT * FROM {{ ref('account') }}
 
 ),
 

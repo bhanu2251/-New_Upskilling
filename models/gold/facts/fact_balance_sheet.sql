@@ -64,8 +64,8 @@ period_movements AS (
 
 ),
 
--- cumulative closing balance: SUM all movements from inception to this period-end
-cumulative AS (
+-- step 1: calculate cumulative balances via self-join
+cumulative_raw AS (
 
     SELECT
         cur.SUBSIDIARY_KEY,
@@ -73,57 +73,36 @@ cumulative AS (
         cur.ACCOUNT_KEY,
         cur.BS_CATEGORY,
         cur.PERIOD_MOVEMENT,
-
-        -- opening balance: cumulative sum of all periods BEFORE this period
-        SUM(prev.PERIOD_MOVEMENT) OVER (
-            PARTITION BY cur.SUBSIDIARY_KEY, cur.ACCOUNT_KEY
-            ORDER BY cur.START_DATE
-            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        )                                                          AS OPENING_BALANCE,
-
-        -- closing balance: cumulative sum including this period
-        SUM(prev.PERIOD_MOVEMENT) OVER (
-            PARTITION BY cur.SUBSIDIARY_KEY, cur.ACCOUNT_KEY
-            ORDER BY cur.START_DATE
-            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-        )                                                          AS CLOSING_BALANCE,
-
-        -- prior period closing balance for variance
-        LAG(
-            SUM(prev.PERIOD_MOVEMENT) OVER (
-                PARTITION BY cur.SUBSIDIARY_KEY, cur.ACCOUNT_KEY
-                ORDER BY cur.START_DATE
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            )
-        ) OVER (
-            PARTITION BY cur.SUBSIDIARY_KEY, cur.ACCOUNT_KEY
-            ORDER BY cur.START_DATE
-        )                                                          AS PRIOR_PERIOD_BALANCE
+        cur.START_DATE,
+        SUM(prev.PERIOD_MOVEMENT)                                  AS CLOSING_BALANCE
 
     FROM period_movements cur
-    -- self-join to accumulate all movements up to and including cur period
     JOIN period_movements prev
         ON  prev.SUBSIDIARY_KEY = cur.SUBSIDIARY_KEY
         AND prev.ACCOUNT_KEY    = cur.ACCOUNT_KEY
         AND prev.START_DATE    <= cur.START_DATE
+    GROUP BY 1, 2, 3, 4, 5, 6
 
 ),
 
--- deduplicate (the self-join produces duplicates per row)
+-- step 2: deduplicate then apply LAG (no nesting)
 deduped AS (
 
-    SELECT DISTINCT
+    SELECT
         SUBSIDIARY_KEY,
         PERIOD_KEY,
         ACCOUNT_KEY,
         BS_CATEGORY,
         PERIOD_MOVEMENT,
-        COALESCE(OPENING_BALANCE, 0)                               AS OPENING_BALANCE,
+        CLOSING_BALANCE - PERIOD_MOVEMENT                         AS OPENING_BALANCE,
         CLOSING_BALANCE,
-        CLOSING_BALANCE                                            AS CLOSING_BALANCE_USD,
-        PRIOR_PERIOD_BALANCE
+        CLOSING_BALANCE                                           AS CLOSING_BALANCE_USD,
+        LAG(CLOSING_BALANCE) OVER (
+            PARTITION BY SUBSIDIARY_KEY, ACCOUNT_KEY
+            ORDER BY START_DATE
+        )                                                         AS PRIOR_PERIOD_BALANCE
 
-    FROM cumulative
+    FROM cumulative_raw
 
 ),
 

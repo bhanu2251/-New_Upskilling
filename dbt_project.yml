@@ -24,6 +24,8 @@ vars:
   bronze_schema:    'RAW'
   environment:      'dev'
   default_timezone: 'UTC'
+  gold_database: 'BUI_BHANU_RAMIREDDY_DB'
+  gold_schema:   'GOLD'
 
 models:
   new_upskilling:
@@ -40,10 +42,18 @@ models:
       +on_schema_change: fail
 
     gold:
-      +materialized: table
-      +schema: GOLD
-      +tags: ["gold"]
-      +on_schema_change: fail
+       +materialized: table
+       +schema: GOLD
+       +tags: ["gold"]
+       +on_schema_change: append_new_columns
+
+       dim:
+         +tags: ["gold", "dimension"]
+
+       facts:
+         +tags: ["gold", "fact"]
+         +materialized: incremental
+         +incremental_strategy: merge
 
 data_tests:
   +store_failures: true
@@ -53,3 +63,8 @@ quoting:
   database:   true
   schema:     true
   identifier: true
+
+snapshots:
+  new_upskilling:
+    +target_schema: GOLD
+    +tags: ["gold", "scd2"]

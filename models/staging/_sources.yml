@@ -1,0 +1,50 @@
+# ============================================================
+# The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+# The content has been verified by the designated engineer.
+# ============================================================
+version: 2
+
+sources:
+  - name: raw
+    database: "{{ var('bronze_database') }}"
+    schema:   "{{ var('bronze_schema') }}"
+    description: >
+      Bronze layer — raw NetSuite data delivered by Fivetran.
+      All 15 source tables land here exactly as Fivetran synced them.
+    loaded_at_field: _FIVETRAN_SYNCED
+    freshness:
+      warn_after:  {count: 30, period: hour}
+      error_after: {count: 48, period: hour}
+    tables:
+      - name: ACCOUNT
+        description: "Raw Chart of Accounts from NetSuite."
+      - name: ACCOUNTINGPERIOD
+        description: "Raw fiscal calendar from NetSuite."
+      - name: CLASSIFICATION
+        description: "Raw business line / class segments from NetSuite."
+      - name: CONSOLIDATEDEXCHANGERATE
+        description: "Raw period-level FX rates from NetSuite."
+      - name: CURRENCY
+        description: "Raw currency master from NetSuite."
+      - name: DEPARTMENT
+        description: "Raw department hierarchy from NetSuite."
+      - name: EMPLOYEE
+        description: "Raw employee master from NetSuite."
+      - name: ENTITY
+        description: "Raw counterparty master from NetSuite."
+      - name: ITEM
+        description: "Raw product and service item master from NetSuite."
+      - name: Location
+        description: "Raw location master from NetSuite (mixed-case identifier)."
+        quoting:
+          identifier: true
+      - name: SUBSIDIARY
+        description: "Raw subsidiary / legal entity hierarchy from NetSuite."
+      - name: TRANSACTION
+        description: "Raw transaction headers from NetSuite."
+      - name: TRANSACTIONACCOUNTINGLINE
+        description: "Raw GL accounting lines from NetSuite — core financial table."
+      - name: TRANSACTIONLINE
+        description: "Raw transaction line detail from NetSuite."
+      - name: TRANSACTIONSTATUS
+        description: "Raw transaction status lookup table from NetSuite."

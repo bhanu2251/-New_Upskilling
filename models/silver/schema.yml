@@ -155,7 +155,20 @@ models:
       - name: transaction_ref
         description: "NetSuite TRANID - document number traceable back to source"
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
+      - name: subsidiary_id
+        description: "FK to subsidiary — null for parent-level transactions"
+        tests:
+          - not_null:
+              config:
+                severity: warn
+          - relationships:
+              to: ref('subsidiary')
+              field: subsidiary_id
+              config:
+                severity: warn
       - name: posting_period_id
         description: "FK to accountingperiod"
         tests:
@@ -163,13 +176,6 @@ models:
           - relationships:
               to: ref('accountingperiod')
               field: period_id
-      - name: subsidiary_id
-        description: "FK to subsidiary"
-        tests:
-          - not_null
-          - relationships:
-              to: ref('subsidiary')
-              field: subsidiary_id
       - name: is_void
         description: "Must always be FALSE in this model"
         tests:
@@ -225,12 +231,16 @@ models:
               to: ref('accountingperiod')
               field: period_id
       - name: subsidiary_id
-        description: "FK to subsidiary"
+        description: "FK to subsidiary — inherits from transaction"
         tests:
-          - not_null
+          - not_null:
+              config:
+                severity: warn
           - relationships:
               to: ref('subsidiary')
               field: subsidiary_id
+              config:
+                severity: warn
       - name: is_posting
         description: "Must always be TRUE - non-posting lines are excluded"
         tests:

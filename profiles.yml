@@ -1,0 +1,35 @@
+# ============================================================
+# The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+# The content has been verified by the designated engineer.
+# ============================================================
+# WARNING: Do NOT commit this file — it contains credentials.
+# Add profiles.yml to .gitignore.
+# All sensitive values are read from environment variables.
+
+default:
+  target: dev
+  outputs:
+    dev:
+      type:      snowflake
+      account:   "{{ env_var('DBT_SF_ACCOUNT') }}"
+      user:      "{{ env_var('DBT_SF_USER') }}"
+      password:  "{{ env_var('DBT_SF_PASSWORD') }}"
+      role:      "{{ env_var('DBT_SF_ROLE') }}"
+      database:  "{{ env_var('DBT_SF_DATABASE', 'BUI_BHANU_RAMIREDDY_DB') }}"
+      warehouse: "{{ env_var('DBT_SF_WAREHOUSE') }}"
+      schema:    SILVER
+      threads:   4
+      client_session_keep_alive: false
+      query_tag: "silver_dbt_dev"
+    prod:
+      type:      snowflake
+      account:   "{{ env_var('DBT_SF_ACCOUNT_PROD') }}"
+      user:      "{{ env_var('DBT_SF_USER_PROD') }}"
+      password:  "{{ env_var('DBT_SF_PASSWORD_PROD') }}"
+      role:      "{{ env_var('DBT_SF_ROLE_PROD') }}"
+      database:  "{{ env_var('DBT_SF_DATABASE_PROD', 'BUI_BHANU_RAMIREDDY_DB') }}"
+      warehouse: "{{ env_var('DBT_SF_WAREHOUSE_PROD') }}"
+      schema:    SILVER
+      threads:   8
+      client_session_keep_alive: false
+      query_tag: "silver_dbt_prod"

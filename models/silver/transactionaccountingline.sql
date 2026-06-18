@@ -116,6 +116,7 @@ cleaned as (
 
     -- only posted GL lines
     where tal.posting = true
+    and tal.account is not null
 )
 
 select * exclude (_row_num)

@@ -1,45 +1,87 @@
--- Model: consolidatedexchangerate
--- Description: Cleaned period-level FX rates from Bronze RAW.CONSOLIDATEDEXCHANGERATE
--- Grain: One row per period + from_subsidiary + to_currency combination
--- Cleaning: numeric casts, coalesce on rates, dedup, _fivetran_deleted filter
--- Reserved words handled: none in this table
--- Critical: AVERAGERATE → P&L, CURRENTRATE → BS assets/liabilities, HISTORICALRATE → equity
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'EXCHANGE_RATE_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'fx']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : consolidatedexchangerate
+    Layer   : Silver
+    Grain   : 1 row per period + from_subsidiary + to_currency combination
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — CAST to NUMBER(38,11) with COALESCE, boolean pass-through
+    Source  : {{ source('raw', 'CONSOLIDATEDEXCHANGERATE') }}
+    Notes   : _FIVETRAN_DELETED = FALSE filter applied.
+              AVERAGERATE → P&L, CURRENTRATE → BS assets/liabilities, HISTORICALRATE → equity.
+              All FX-specific Bronze columns double-quoted (camelCase Fivetran names).
+#}
 
-with source as (
-    select * from {{ source('raw', 'CONSOLIDATEDEXCHANGERATE') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'CONSOLIDATEDEXCHANGERATE') }}
+    {% if is_incremental() %}
+    WHERE "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        id                                                  as exchange_rate_id,
-        postingperiod                                       as period_id,
-        fromcurrency                                        as from_currency_id,
-        tocurrency                                          as to_currency_id,
-        fromsubsidiary                                      as from_subsidiary_id,
-        tosubsidiary                                        as to_subsidiary_id,
-        -- coalesce to 1 (no conversion) if rate is missing — safe default for USD→USD rows
-        cast(coalesce(averagerate, 1) as number(38, 11))    as average_rate,
-        cast(coalesce(currentrate, 1) as number(38, 11))    as current_rate,
-        cast(coalesce(historicalrate, 1) as number(38, 11)) as historical_rate,
-        iseliminationsubsidiary                             as is_elimination_subsidiary,
-        isperiodclosed                                      as is_period_closed,
+cleaned AS (
 
-        _fivetran_synced                                    as fivetran_synced_at,
+    SELECT *
+    FROM source
+    WHERE _FIVETRAN_DELETED = FALSE
 
-        row_number() over (
-            partition by postingperiod, fromsubsidiary, tocurrency
-            order by _fivetran_synced desc
-        )                                                   as _row_num
+),
 
-    from source
-    where _fivetran_deleted = false
+renamed AS (
+
+    SELECT
+        MD5(CAST(ID AS VARCHAR))                                        AS SURROGATE_KEY,
+        ID                                                              AS EXCHANGE_RATE_ID,
+        "POSTINGPERIOD"                                                 AS PERIOD_ID,
+        "FROMCURRENCY"                                                  AS FROM_CURRENCY_ID,
+        "TOCURRENCY"                                                    AS TO_CURRENCY_ID,
+        "FROMSUBSIDIARY"                                                AS FROM_SUBSIDIARY_ID,
+        "TOSUBSIDIARY"                                                  AS TO_SUBSIDIARY_ID,
+        CAST(COALESCE("AVERAGERATE",    1) AS NUMBER(38,11))            AS AVERAGE_RATE,
+        CAST(COALESCE("CURRENTRATE",    1) AS NUMBER(38,11))            AS CURRENT_RATE,
+        CAST(COALESCE("HISTORICALRATE", 1) AS NUMBER(38,11))            AS HISTORICAL_RATE,
+        "ISELIMINATIONSUBSIDIARY"                                       AS IS_ELIMINATION_SUBSIDIARY,
+        "ISPERIODCLOSED"                                                AS IS_PERIOD_CLOSED,
+        "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
+
+    FROM cleaned
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.EXCHANGE_RATE_ID = renamed.EXCHANGE_RATE_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

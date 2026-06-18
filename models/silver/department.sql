@@ -1,38 +1,80 @@
--- Model: department
--- Description: Cleaned department hierarchy from Bronze RAW.DEPARTMENT
--- Grain: One row per department (unique DEPARTMENT.ID)
--- Cleaning: trim, nullif, dedup, isinactive filter
--- Reserved words handled: name → department_name (NAME is reserved in some SQL dialects)
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'DEPARTMENT_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'reference']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : department
+    Layer   : Silver
+    Grain   : 1 row per department (unique DEPARTMENT.ID), active departments only
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, boolean filter
+    Source  : {{ source('raw', 'DEPARTMENT') }}
+    Notes   : ISINACTIVE = FALSE filter. NAME, FULLNAME, SUBSIDIARY double-quoted.
+#}
 
-with source as (
-    select * from {{ source('raw', 'DEPARTMENT') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'DEPARTMENT') }}
+    {% if is_incremental() %}
+    WHERE "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        id                                              as department_id,
-        nullif(trim(name), '')                          as department_name,      -- name is a reserved word
-        nullif(trim(fullname), '')                      as department_full_name,
-        parent                                          as parent_department_id,
-        subsidiary                                      as subsidiary,
-        isinactive                                      as is_inactive,
+cleaned AS (
 
-        _fivetran_synced                                as fivetran_synced_at,
+    SELECT *
+    FROM source
+    WHERE "ISINACTIVE" = FALSE
 
-        row_number() over (
-            partition by id
-            order by _fivetran_synced desc
-        )                                               as _row_num
+),
 
-    from source
-    where isinactive = false
+renamed AS (
+
+    SELECT
+        MD5(CAST(ID AS VARCHAR))                                        AS SURROGATE_KEY,
+        ID                                                              AS DEPARTMENT_ID,
+        NULLIF(TRIM("NAME"), '')                                        AS DEPARTMENT_NAME,
+        NULLIF(TRIM("FULLNAME"), '')                                    AS DEPARTMENT_FULL_NAME,
+        PARENT                                                          AS PARENT_DEPARTMENT_ID,
+        "SUBSIDIARY"                                                    AS SUBSIDIARY,
+        "ISINACTIVE"                                                    AS IS_INACTIVE,
+        "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
+
+    FROM cleaned
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.DEPARTMENT_ID = renamed.DEPARTMENT_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

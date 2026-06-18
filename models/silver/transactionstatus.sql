@@ -1,34 +1,59 @@
--- Model: transactionstatus
--- Description: Lookup table for transaction status codes from RAW.TRANSACTIONSTATUS
--- Grain: One row per transaction status (unique TRANSACTION_STATUS_ID)
--- Cleaning: trim, nullif, dedup (no isinactive filter — this is a pure lookup table)
--- Reserved words handled: none in this table
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'TRANSACTION_STATUS_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'lookup']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : transactionstatus
+    Layer   : Silver
+    Grain   : 1 row per transaction status code (unique TRANSACTION_STATUS_ID)
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR
+    Source  : {{ source('raw', 'TRANSACTIONSTATUS') }}
+    Notes   : No ISINACTIVE or watermark column — full refresh only.
+              All source columns double-quoted (underscore names conflict with reserved words).
+#}
 
-with source as (
-    select * from {{ source('raw', 'TRANSACTIONSTATUS') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'TRANSACTIONSTATUS') }}
+
 ),
 
-cleaned as (
-    select
-        transaction_status_id                           as transaction_status_id,
-        nullif(trim(transaction_status_full_name), '')  as status_full_name,
-        nullif(trim(transaction_status_name), '')       as status_name,
-        nullif(trim(transaction_type), '')              as transaction_type,
-        nullif(trim(tran_custom_type_id), '')           as custom_type_id,
+renamed AS (
 
-        row_number() over (
-            partition by transaction_status_id
-            order by transaction_status_id
-        )                                               as _row_num
+    SELECT
+        MD5(CAST("TRANSACTION_STATUS_ID" AS VARCHAR))                   AS SURROGATE_KEY,
+        "TRANSACTION_STATUS_ID"                                         AS TRANSACTION_STATUS_ID,
+        NULLIF(TRIM("TRANSACTION_STATUS_FULL_NAME"), '')                AS STATUS_FULL_NAME,
+        NULLIF(TRIM("TRANSACTION_STATUS_NAME"), '')                     AS STATUS_NAME,
+        NULLIF(TRIM("TRANSACTION_TYPE"), '')                            AS TRANSACTION_TYPE,
+        NULLIF(TRIM("TRAN_CUSTOM_TYPE_ID"), '')                         AS CUSTOM_TYPE_ID
 
-    from source
+    FROM source
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

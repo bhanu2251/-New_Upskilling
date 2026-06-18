@@ -1,58 +1,129 @@
--- Model: transactionline
--- Description: Cleaned line-level transaction detail from Bronze RAW.TRANSACTIONLINE
--- Grain: One row per transaction line (TRANSACTION + ID composite key)
--- Cleaning: trim, nullif, numeric casts, dedup
--- Key filters: mainline=false (no header summary lines), taxline=false, inner join to transaction
--- Reserved words handled:
---   class → class_id  (CLASS is reserved in Snowflake)
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = ['TRANSACTION_ID', 'LINE_ID'],
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'transactional']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : transactionline
+    Layer   : Silver
+    Grain   : 1 row per transaction line (TRANSACTION + ID composite key)
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — MAINLINE=FALSE, TAXLINE=FALSE filters, CAST to NUMBER(38,2)
+    Source  : {{ source('raw', 'TRANSACTIONLINE') }}
+    Notes   : MAINLINE=FALSE (no header summary lines) and TAXLINE=FALSE filters applied.
+              Only lines from posted non-voided transactions flow through via
+              inner join to silver.transaction.
+              TRANSACTION, CLASS, DEPARTMENT, LOCATION, ENTITY, SUBSIDIARY,
+              FOREIGNAMOUNT, CREDITFOREIGNAMOUNT, DEBITFOREIGNAMOUNT,
+              NETAMOUNT, MAINLINE, ISCOGS, EXPENSEACCOUNT, TAXLINE, ITEM,
+              ITEMTYPE double-quoted.
+#}
 
-with source as (
-    select * from {{ source('raw', 'TRANSACTIONLINE') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'TRANSACTIONLINE') }}
+    WHERE "MAINLINE" = FALSE
+      AND "TAXLINE"  = FALSE
+    {% if is_incremental() %}
+      AND "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        tl.transaction                                  as transaction_id,
-        tl.id                                           as line_id,
-        tl.department                                   as department_id,
-        tl.class                                        as class_id,             -- class is a reserved word
-        tl.location                                     as location_id,
-        tl.entity                                       as entity_id,
-        tl.subsidiary                                   as subsidiary_id,
-        cast(coalesce(tl.foreignamount, 0) as number(38, 2))       as foreign_amount,
-        cast(coalesce(tl.creditforeignamount, 0) as number(38, 2)) as credit_foreign_amount,
-        cast(coalesce(tl.debitforeignamount, 0) as number(38, 2))  as debit_foreign_amount,
-        cast(coalesce(tl.netamount, 0) as number(38, 2))            as net_amount,
-        nullif(trim(tl.memo), '')                       as line_memo,
-        tl.mainline                                     as is_mainline,
-        tl.iscogs                                       as is_cogs,
-        tl.expenseaccount                               as expense_account_id,
-        tl.taxline                                      as is_tax_line,
-        tl.item                                         as item_id,
-        nullif(trim(tl.itemtype), '')                   as item_type,
-        tl.eliminate                                    as eliminate,
+-- inner join ensures only lines from posted, non-voided transactions pass through
+posted_transactions AS (
 
-        tl._fivetran_synced                             as fivetran_synced_at,
+    SELECT TRANSACTION_ID
+    FROM {{ ref('transaction') }}
 
-        row_number() over (
-            partition by tl.transaction, tl.id
-            order by tl._fivetran_synced desc
-        )                                               as _row_num
+),
 
-    from source tl
-    -- inner join ensures only lines from posted, non-voided transactions pass through
-    inner join {{ ref('transaction') }} t
-        on tl.transaction = t.transaction_id
+filtered AS (
 
-    where tl.mainline = false
-      and tl.taxline  = false
+    SELECT s.*
+    FROM source s
+    INNER JOIN posted_transactions pt
+        ON s."TRANSACTION" = pt.TRANSACTION_ID
+
+),
+
+renamed AS (
+
+    SELECT
+        MD5(
+            CAST("TRANSACTION" AS VARCHAR) || '|' || CAST(ID AS VARCHAR)
+        )                                                               AS SURROGATE_KEY,
+
+        -- composite primary key
+        "TRANSACTION"                                                   AS TRANSACTION_ID,
+        ID                                                              AS LINE_ID,
+
+        -- dimension foreign keys
+        "DEPARTMENT"                                                    AS DEPARTMENT_ID,
+        "CLASS"                                                         AS CLASS_ID,
+        "LOCATION"                                                      AS LOCATION_ID,
+        "ENTITY"                                                        AS ENTITY_ID,
+        "SUBSIDIARY"                                                    AS SUBSIDIARY_ID,
+
+        -- amounts (functional currency)
+        CAST(COALESCE("FOREIGNAMOUNT",       0) AS NUMBER(38,2))        AS FOREIGN_AMOUNT,
+        CAST(COALESCE("CREDITFOREIGNAMOUNT", 0) AS NUMBER(38,2))        AS CREDIT_FOREIGN_AMOUNT,
+        CAST(COALESCE("DEBITFOREIGNAMOUNT",  0) AS NUMBER(38,2))        AS DEBIT_FOREIGN_AMOUNT,
+        CAST(COALESCE("NETAMOUNT",           0) AS NUMBER(38,2))        AS NET_AMOUNT,
+
+        -- memo
+        NULLIF(TRIM(MEMO), '')                                          AS LINE_MEMO,
+
+        -- flags
+        "MAINLINE"                                                      AS IS_MAINLINE,
+        "ISCOGS"                                                        AS IS_COGS,
+        "EXPENSEACCOUNT"                                                AS EXPENSE_ACCOUNT_ID,
+        "TAXLINE"                                                       AS IS_TAX_LINE,
+        "ITEM"                                                          AS ITEM_ID,
+        NULLIF(TRIM("ITEMTYPE"), '')                                    AS ITEM_TYPE,
+        ELIMINATE                                                       AS ELIMINATE,
+
+        "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
+
+    FROM filtered
+
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY "TRANSACTION", ID
+        ORDER BY "_FIVETRAN_SYNCED" DESC
+    ) = 1
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.TRANSACTION_ID = renamed.TRANSACTION_ID
+               AND existing.LINE_ID        = renamed.LINE_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

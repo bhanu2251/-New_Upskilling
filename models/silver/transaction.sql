@@ -1,67 +1,138 @@
--- Model: transaction
--- Description: Cleaned transaction headers from Bronze RAW.TRANSACTION
--- Grain: One row per transaction (unique TRANSACTION.ID)
--- Cleaning: trim, nullif, date/numeric casts, dedup, void+posting+fivetran_deleted filter
--- Reserved words handled:
---   type   → transaction_type  (TYPE is reserved in Snowflake)
---   status → status_code       (STATUS is reserved in some SQL dialects)
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'TRANSACTION_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'transactional']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : transaction
+    Layer   : Silver
+    Grain   : 1 row per transaction (unique TRANSACTION.ID)
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — filters VOID=FALSE, POSTING=TRUE, _FIVETRAN_DELETED=FALSE
+              STATUS decoded via left join to transactionstatus
+    Source  : {{ source('raw', 'TRANSACTION') }}
+    Notes   : VOID, POSTING, _FIVETRAN_DELETED filters applied at source CTE.
+              DEDUP-1 via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED.
+              TYPE, STATUS, ENTITY, CURRENCY, EMPLOYEE, TOSUBSIDIARY, TRANID,
+              TRANDATE, RECORDTYPE, POSTINGPERIOD, EXCHANGERATE double-quoted.
+              STATUS decoded from silver.transactionstatus via ref().
+#}
 
-with source as (
-    select * from {{ source('raw', 'TRANSACTION') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'TRANSACTION') }}
+    WHERE VOID              = FALSE
+      AND POSTING           = TRUE
+      AND _FIVETRAN_DELETED = FALSE
+    {% if is_incremental() %}
+      AND "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        t.id                                            as transaction_id,
-        nullif(trim(t.tranid), '')                      as transaction_ref,
-        nullif(trim(t.type), '')                        as transaction_type,     -- type is a reserved word
-        nullif(trim(t.recordtype), '')                  as record_type,
-        cast(t.trandate as date)                        as transaction_date,
-        t.postingperiod                                 as posting_period_id,
-        t.entity                                        as entity_id,
-        t.tosubsidiary                                  as subsidiary_id,        -- NOTE: not t.subsidiary
-        nullif(trim(t.status), '')                      as status_code,          -- status is a reserved word
-        ts.status_name                                  as status_name,
-        ts.status_full_name                             as status_full_name,
-        t.currency                                      as currency_id,
-        cast(coalesce(t.exchangerate, 1) as number(38, 9)) as exchange_rate,
-        nullif(trim(t.memo), '')                        as memo,
-        t.void                                          as is_void,
-        t.posting                                       as is_posting,
-        t.employee                                      as employee_id,
+status_lookup AS (
+
+    SELECT
+        STATUS_NAME,
+        STATUS_FULL_NAME,
+        TRANSACTION_TYPE
+    FROM {{ ref('transactionstatus') }}
+
+),
+
+renamed AS (
+
+    SELECT
+        MD5(CAST(t.ID AS VARCHAR))                                      AS SURROGATE_KEY,
+
+        -- primary key
+        t.ID                                                            AS TRANSACTION_ID,
+
+        -- identifiers
+        NULLIF(TRIM("TRANID"), '')                                      AS TRANSACTION_REF,
+        NULLIF(TRIM("TYPE"), '')                                        AS TRANSACTION_TYPE,
+        NULLIF(TRIM("RECORDTYPE"), '')                                  AS RECORD_TYPE,
+
+        -- dates
+        CAST("TRANDATE" AS DATE)                                        AS TRANSACTION_DATE,
+        "POSTINGPERIOD"                                                 AS POSTING_PERIOD_ID,
+
+        -- foreign keys
+        "ENTITY"                                                        AS ENTITY_ID,
+        "TOSUBSIDIARY"                                                  AS SUBSIDIARY_ID,
+
+        -- status (raw code + decoded from lookup)
+        NULLIF(TRIM("STATUS"), '')                                      AS STATUS_CODE,
+        sl.STATUS_NAME                                                  AS STATUS_NAME,
+        sl.STATUS_FULL_NAME                                             AS STATUS_FULL_NAME,
+
+        -- currency and rate
+        "CURRENCY"                                                      AS CURRENCY_ID,
+        CAST(COALESCE("EXCHANGERATE", 1) AS NUMBER(38,9))               AS EXCHANGE_RATE,
+
+        -- memo
+        NULLIF(TRIM(MEMO), '')                                          AS MEMO,
+
+        -- flags (always FALSE/TRUE after WHERE filter — carried for downstream tests)
+        VOID                                                            AS IS_VOID,
+        POSTING                                                         AS IS_POSTING,
+
+        -- employee
+        "EMPLOYEE"                                                      AS EMPLOYEE_ID,
 
         -- intercompany fields
-        t.intercotransaction                            as interco_transaction_id,
-        nullif(trim(t.intercostatus), '')               as interco_status,
-        t.intercoadj                                    as is_interco_adj,
+        "INTERCOTRANSACTION"                                            AS INTERCO_TRANSACTION_ID,
+        NULLIF(TRIM("INTERCOSTATUS"), '')                               AS INTERCO_STATUS,
+        "INTERCOADJ"                                                    AS IS_INTERCO_ADJ,
 
         -- reversal fields
-        t.isreversal                                    as is_reversal,
-        t.reversal                                      as reversal_transaction_id,
-        cast(t.reversaldate as date)                    as reversal_date,
+        "ISREVERSAL"                                                    AS IS_REVERSAL,
+        REVERSAL                                                        AS REVERSAL_TRANSACTION_ID,
+        CAST("REVERSALDATE" AS DATE)                                    AS REVERSAL_DATE,
 
-        t._fivetran_synced                              as fivetran_synced_at,
+        t."_FIVETRAN_SYNCED"                                            AS FIVETRAN_SYNCED_AT
 
-        row_number() over (
-            partition by t.id
-            order by t._fivetran_synced desc
-        )                                               as _row_num
+    FROM source t
+    LEFT JOIN status_lookup sl
+        ON NULLIF(TRIM(t."STATUS"), '')  = sl.STATUS_NAME
+       AND NULLIF(TRIM(t."TYPE"), '')    = sl.TRANSACTION_TYPE
 
-    from source t
-    left join {{ ref('transactionstatus') }} ts
-        on nullif(trim(t.status), '') = ts.status_name
-        and nullif(trim(t.type), '')  = ts.transaction_type
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY t.ID
+        ORDER BY t."_FIVETRAN_SYNCED" DESC
+    ) = 1
 
-    where t.void             = false
-      and t.posting          = true
-      and t._fivetran_deleted = false
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.TRANSACTION_ID = renamed.TRANSACTION_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

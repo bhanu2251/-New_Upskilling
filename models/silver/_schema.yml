@@ -1,0 +1,369 @@
+# ============================================================
+# The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+# The content has been verified by the designated engineer.
+# ============================================================
+version: 2
+
+models:
+
+  - name: account
+    description: >
+      Cleaned Chart of Accounts. ISINACTIVE=FALSE filter applied.
+      ACCOUNT_TYPE determines financial statement classification (P&L vs Balance Sheet).
+      CASH_FLOW_RATE drives Cash Flow Statement categorisation.
+      GENERAL_RATE controls FX translation rate type.
+      Derived columns: FINANCIAL_STATEMENT, PL_CATEGORY, BS_CATEGORY.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of ACCOUNT_ID — sole primary key for downstream joins."
+        data_tests: [unique, not_null]
+      - name: ACCOUNT_ID
+        description: "Natural key — unique NetSuite account identifier."
+        data_tests: [unique, not_null]
+      - name: ACCOUNT_TYPE
+        description: "NetSuite account type — determines which financial statement this account appears on."
+        data_tests: [not_null]
+      - name: FINANCIAL_STATEMENT
+        description: "Derived classification: P&L, Balance Sheet, or Unclassified."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['P&L', 'Balance Sheet', 'Unclassified']
+      - name: SILVER_CREATED_ON_TS_UTC
+        description: "UTC timestamp of first Silver insert."
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        description: "UTC timestamp of last Silver update."
+        data_tests: [not_null]
+
+  - name: accountingperiod
+    description: >
+      Cleaned fiscal calendar. ISINACTIVE=FALSE filter applied.
+      IS_POSTING=TRUE periods accept journal entries.
+      IS_CLOSED=TRUE periods are locked against further adjustments.
+      IS_ADJUST=TRUE flags year-end adjustment periods.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of PERIOD_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: PERIOD_ID
+        description: "Natural key — unique NetSuite accounting period identifier."
+        data_tests: [unique, not_null]
+      - name: START_DATE
+        data_tests: [not_null]
+      - name: END_DATE
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: classification
+    description: >
+      Cleaned business line / class segments. ISINACTIVE=FALSE filter applied.
+      Used for P&L reporting by revenue stream within and across subsidiaries.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of CLASS_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: CLASS_ID
+        description: "Natural key — unique classification identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: consolidatedexchangerate
+    description: >
+      Cleaned period-level FX rates. _FIVETRAN_DELETED=FALSE filter applied.
+      AVERAGE_RATE → P&L translation.
+      CURRENT_RATE → Balance Sheet assets/liabilities translation.
+      HISTORICAL_RATE → equity translation.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of EXCHANGE_RATE_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: EXCHANGE_RATE_ID
+        description: "Natural key — unique exchange rate record identifier."
+        data_tests: [unique, not_null]
+      - name: AVERAGE_RATE
+        description: "Average rate for P&L translation — COALESCE default 1."
+        data_tests: [not_null]
+      - name: CURRENT_RATE
+        description: "Period-end spot rate for Balance Sheet translation — COALESCE default 1."
+        data_tests: [not_null]
+      - name: HISTORICAL_RATE
+        description: "Historical rate for equity translation — COALESCE default 1."
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: currency
+    description: >
+      Cleaned currency master. ISINACTIVE=FALSE filter applied.
+      IS_BASE_CURRENCY identifies USD as the group reporting currency.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of CURRENCY_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: CURRENCY_ID
+        description: "Natural key — unique currency identifier."
+        data_tests: [unique, not_null]
+      - name: CURRENCY_SYMBOL
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: department
+    description: >
+      Cleaned department hierarchy. ISINACTIVE=FALSE filter applied.
+      Maps each GL line to a cost centre — Finance, Operations, Sales, Technology, G&A.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of DEPARTMENT_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: DEPARTMENT_ID
+        description: "Natural key — unique department identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: employee
+    description: >
+      Cleaned employee master. ISINACTIVE=FALSE filter applied.
+      Used to attribute employee-related GL entries to correct department and subsidiary.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of EMPLOYEE_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: EMPLOYEE_ID
+        description: "Natural key — unique employee identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: entity
+    description: >
+      Unified counterparty master — customers, vendors, employees, and partners.
+      ISINACTIVE=FALSE filter applied.
+      TYPE distinguishes entity categories.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of ENTITY_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: ENTITY_ID
+        description: "Natural key — unique entity identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: item
+    description: >
+      Cleaned product and service item master. ISINACTIVE=FALSE filter applied.
+      Used for COGS analysis by product line.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of ITEM_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: ITEM_ID
+        description: "Natural key — unique item identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: location
+    description: >
+      Cleaned location master. ISINACTIVE=FALSE filter applied.
+      Source table is mixed-case 'Location' in RAW — handled by quoting in _sources.yml.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of LOCATION_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: LOCATION_ID
+        description: "Natural key — unique location identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: subsidiary
+    description: >
+      Cleaned legal entity hierarchy. ISINACTIVE=FALSE filter applied.
+      PARENT defines the consolidation tree — all five portfolio companies roll up to PCP Holdings.
+      IS_ELIMINATION flags the subsidiary used to net out intercompany transactions.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of SUBSIDIARY_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: SUBSIDIARY_ID
+        description: "Natural key — unique subsidiary identifier."
+        data_tests: [unique, not_null]
+      - name: SUBSIDIARY_NAME
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: transactionstatus
+    description: >
+      Lookup table for transaction status codes. No watermark column — full refresh only.
+      Used to decode STATUS field on TRANSACTION.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of TRANSACTION_STATUS_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: TRANSACTION_STATUS_ID
+        description: "Natural key — unique status identifier."
+        data_tests: [unique, not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: transaction
+    description: >
+      Cleaned transaction headers. VOID=FALSE, POSTING=TRUE, _FIVETRAN_DELETED=FALSE filters applied.
+      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+      STATUS decoded from silver.transactionstatus via LEFT JOIN.
+      Foundation for all downstream GL work.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of TRANSACTION_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: TRANSACTION_ID
+        description: "Natural key — unique transaction identifier."
+        data_tests: [unique, not_null]
+      - name: TRANSACTION_REF
+        description: "NetSuite TRANID — document number traceable back to source."
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: SUBSIDIARY_ID
+        description: "FK to subsidiary — sourced from TOSUBSIDIARY."
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+          - relationships:
+              to: ref('subsidiary')
+              field: SUBSIDIARY_ID
+              config:
+                severity: warn
+      - name: POSTING_PERIOD_ID
+        description: "FK to accountingperiod."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('accountingperiod')
+              field: PERIOD_ID
+      - name: IS_VOID
+        description: "Always FALSE in this model — voided transactions are excluded."
+        data_tests:
+          - accepted_values:
+              values: [false]
+      - name: IS_POSTING
+        description: "Always TRUE in this model — non-posting transactions are excluded."
+        data_tests:
+          - accepted_values:
+              values: [true]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: transactionline
+    description: >
+      Cleaned transaction lines. MAINLINE=FALSE and TAXLINE=FALSE filters applied.
+      Only lines from posted non-voided transactions are included (inner join to silver.transaction).
+      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of TRANSACTION_ID|LINE_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: TRANSACTION_ID
+        description: "FK to transaction — composite key component."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('transaction')
+              field: TRANSACTION_ID
+      - name: LINE_ID
+        description: "Line sequence number within the transaction — composite key component."
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]
+
+  - name: transactionaccountingline
+    description: >
+      The clean General Ledger — single source of truth for all financial statements.
+      POSTING=TRUE filter applied. Voided transactions excluded via inner join to silver.transaction.
+      Line context joined from silver.transactionline.
+      Account classification joined from silver.account.
+      FX translation: AVERAGERATE for P&L, CURRENTRATE for BS assets/liabilities, HISTORICALRATE for equity.
+      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+    columns:
+      - name: SURROGATE_KEY
+        description: "MD5 hash of TRANSACTION_ID|LINE_ID|ACCOUNTING_BOOK_ID — sole primary key."
+        data_tests: [unique, not_null]
+      - name: TRANSACTION_ID
+        description: "FK to transaction — composite key component."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('transaction')
+              field: TRANSACTION_ID
+      - name: ACCOUNT_ID
+        description: "FK to account."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('account')
+              field: ACCOUNT_ID
+      - name: PERIOD_ID
+        description: "FK to accountingperiod."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('accountingperiod')
+              field: PERIOD_ID
+      - name: SUBSIDIARY_ID
+        description: "FK to subsidiary — inherited from transaction."
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+          - relationships:
+              to: ref('subsidiary')
+              field: SUBSIDIARY_ID
+              config:
+                severity: warn
+      - name: IS_POSTING
+        description: "Always TRUE — non-posting lines are excluded."
+        data_tests:
+          - accepted_values:
+              values: [true]
+      - name: REPORTING_AMOUNT_USD
+        description: "Amount translated to USD using rate type per account classification."
+        data_tests: [not_null]
+      - name: SILVER_CREATED_ON_TS_UTC
+        data_tests: [not_null]
+      - name: SILVER_UPDATED_ON_TS_UTC
+        data_tests: [not_null]

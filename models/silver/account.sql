@@ -1,81 +1,128 @@
--- Model: account
--- Description: Cleaned Chart of Accounts from Bronze RAW.ACCOUNT
--- Grain: One row per account (unique ACCOUNT.ID)
--- Cleaning: trim on text, nullif on empty strings, dedup via qualify, isinactive filter
--- Reserved words handled: none in this table
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'ACCOUNT_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'reference']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : account
+    Layer   : Silver
+    Grain   : 1 row per NetSuite account (unique ACCOUNT.ID), active accounts only
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, CAST on DATE, boolean filters
+    Source  : {{ source('raw', 'ACCOUNT') }}
+    Notes   : ISINACTIVE = FALSE filter applied. Derived cols: FINANCIAL_STATEMENT,
+              PL_CATEGORY, BS_CATEGORY from ACCTTYPE classification logic.
+              Reserved-word Bronze columns double-quoted throughout.
+#}
 
-with source as (
-    select * from {{ source('raw', 'ACCOUNT') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'ACCOUNT') }}
+    {% if is_incremental() %}
+    WHERE "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        id                                                          as account_id,
-        trim(acctnumber)                                            as account_number,
-        trim(accttype)                                              as account_type,
-        nullif(trim(fullname), '')                                  as account_full_name,
-        nullif(trim(displaynamewithhierarchy), '')                  as account_display_name,
-        parent                                                      as parent_account_id,
-        subsidiary                                                  as subsidiary,
-        nullif(trim(cashflowrate), '')                              as cash_flow_rate,
-        nullif(trim(generalrate), '')                               as general_rate,
-        issummary                                                   as is_summary,
-        isinactive                                                  as is_inactive,
-        eliminate                                                   as eliminate,
-        nullif(trim(description), '')                               as account_description,
+cleaned AS (
 
-        -- Derived: financial statement classification
-        case
-            when trim(accttype) in ('Income', 'Other Income')                          then 'P&L'
-            when trim(accttype) in ('Cost of Goods Sold')                              then 'P&L'
-            when trim(accttype) in ('Expense', 'Other Expense')                        then 'P&L'
-            when trim(accttype) in ('Bank', 'Accounts Receivable', 'Other Current Asset',
-                                    'Fixed Asset', 'Other Asset', 'Deferred Expense')  then 'Balance Sheet'
-            when trim(accttype) in ('Accounts Payable', 'Other Current Liability',
-                                    'Long Term Liability', 'Deferred Revenue')         then 'Balance Sheet'
-            when trim(accttype) in ('Equity', 'Retained Earnings')                     then 'Balance Sheet'
-            else 'Unclassified'
-        end                                                         as financial_statement,
+    SELECT *
+    FROM source
+    WHERE ISINACTIVE = FALSE
 
-        -- Derived: P&L sub-category
-        case
-            when trim(accttype) in ('Income', 'Other Income')      then 'Revenue'
-            when trim(accttype) = 'Cost of Goods Sold'             then 'COGS'
-            when trim(accttype) in ('Expense', 'Other Expense')    then 'Operating Expense'
-            else null
-        end                                                         as pl_category,
+),
 
-        -- Derived: Balance Sheet sub-category
-        case
-            when trim(accttype) in ('Bank', 'Accounts Receivable',
-                                    'Other Current Asset')         then 'Current Asset'
-            when trim(accttype) in ('Fixed Asset', 'Other Asset',
-                                    'Deferred Expense')            then 'Non-Current Asset'
-            when trim(accttype) in ('Accounts Payable',
-                                    'Other Current Liability',
-                                    'Deferred Revenue')            then 'Current Liability'
-            when trim(accttype) = 'Long Term Liability'            then 'Non-Current Liability'
-            when trim(accttype) in ('Equity', 'Retained Earnings') then 'Equity'
-            else null
-        end                                                         as bs_category,
+renamed AS (
 
-        _fivetran_synced                                            as fivetran_synced_at,
+    SELECT
+        -- surrogate key
+        MD5(CAST(ID AS VARCHAR))                                        AS SURROGATE_KEY,
 
-        -- dedup: keep latest fivetran sync per account id
-        row_number() over (
-            partition by id
-            order by _fivetran_synced desc
-        )                                                           as _row_num
+        -- primary key
+        ID                                                              AS ACCOUNT_ID,
 
-    from source
-    where isinactive = false
+        -- attributes
+        NULLIF(TRIM("ACCTNUMBER"), '')                                  AS ACCOUNT_NUMBER,
+        NULLIF(TRIM("ACCTTYPE"), '')                                    AS ACCOUNT_TYPE,
+        NULLIF(TRIM("FULLNAME"), '')                                    AS ACCOUNT_FULL_NAME,
+        NULLIF(TRIM("DISPLAYNAMEWITHHIERARCHY"), '')                    AS ACCOUNT_DISPLAY_NAME,
+        PARENT                                                          AS PARENT_ACCOUNT_ID,
+        "SUBSIDIARY"                                                    AS SUBSIDIARY,
+        NULLIF(TRIM("CASHFLOWRATE"), '')                                AS CASH_FLOW_RATE,
+        NULLIF(TRIM("GENERALRATE"), '')                                 AS GENERAL_RATE,
+        "ISSUMMARY"                                                     AS IS_SUMMARY,
+        "ISINACTIVE"                                                    AS IS_INACTIVE,
+        ELIMINATE                                                       AS ELIMINATE,
+        NULLIF(TRIM(DESCRIPTION), '')                                   AS ACCOUNT_DESCRIPTION,
+
+        -- derived: financial statement classification
+        CASE
+            WHEN TRIM("ACCTTYPE") IN ('Income', 'Other Income',
+                 'Cost of Goods Sold', 'Expense', 'Other Expense')          THEN 'P&L'
+            WHEN TRIM("ACCTTYPE") IN ('Bank', 'Accounts Receivable',
+                 'Other Current Asset', 'Fixed Asset', 'Other Asset',
+                 'Deferred Expense', 'Accounts Payable',
+                 'Other Current Liability', 'Long Term Liability',
+                 'Deferred Revenue', 'Equity', 'Retained Earnings')         THEN 'Balance Sheet'
+            ELSE 'Unclassified'
+        END                                                             AS FINANCIAL_STATEMENT,
+
+        -- derived: P&L sub-category
+        CASE
+            WHEN TRIM("ACCTTYPE") IN ('Income', 'Other Income')             THEN 'Revenue'
+            WHEN TRIM("ACCTTYPE") = 'Cost of Goods Sold'                    THEN 'COGS'
+            WHEN TRIM("ACCTTYPE") IN ('Expense', 'Other Expense')           THEN 'Operating Expense'
+            ELSE NULL
+        END                                                             AS PL_CATEGORY,
+
+        -- derived: balance sheet sub-category
+        CASE
+            WHEN TRIM("ACCTTYPE") IN ('Bank', 'Accounts Receivable',
+                 'Other Current Asset')                                     THEN 'Current Asset'
+            WHEN TRIM("ACCTTYPE") IN ('Fixed Asset', 'Other Asset',
+                 'Deferred Expense')                                        THEN 'Non-Current Asset'
+            WHEN TRIM("ACCTTYPE") IN ('Accounts Payable',
+                 'Other Current Liability', 'Deferred Revenue')             THEN 'Current Liability'
+            WHEN TRIM("ACCTTYPE") = 'Long Term Liability'                   THEN 'Non-Current Liability'
+            WHEN TRIM("ACCTTYPE") IN ('Equity', 'Retained Earnings')        THEN 'Equity'
+            ELSE NULL
+        END                                                             AS BS_CATEGORY,
+
+        "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
+
+    FROM cleaned
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.ACCOUNT_ID = renamed.ACCOUNT_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

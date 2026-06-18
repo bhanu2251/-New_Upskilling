@@ -1,58 +1,107 @@
--- Model: accountingperiod
--- Description: Cleaned fiscal calendar from Bronze RAW.ACCOUNTINGPERIOD
--- Grain: One row per accounting period (unique ACCOUNTINGPERIOD.ID)
--- Cleaning: trim on text, date casts, dedup, isinactive filter
--- Reserved words handled: none in this table
+-- ============================================================
+-- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The content has been verified by the designated engineer.
+-- ============================================================
+{{
+    config(
+        materialized     = 'table',
+        schema           = 'SILVER',
+        unique_key       = 'PERIOD_ID',
+        on_schema_change = 'fail',
+        tags             = ['silver', 'netsuite', 'reference']
+    )
+}}
 
-{{ config(
-    materialized='table',
-    schema='SILVER'
-) }}
+{#
+    Model   : accountingperiod
+    Layer   : Silver
+    Grain   : 1 row per fiscal period (unique ACCOUNTINGPERIOD.ID), active periods only
+    Schema  : static — explicit column list from Silver LLD
+    Cleaning: inline — CAST(x AS DATE), boolean pass-through, derived fiscal fields
+    Source  : {{ source('raw', 'ACCOUNTINGPERIOD') }}
+    Notes   : ISINACTIVE = FALSE filter applied.
+              Derived: FISCAL_YEAR, FISCAL_QUARTER, FISCAL_MONTH, PERIOD_TYPE.
+#}
 
-with source as (
-    select * from {{ source('raw', 'ACCOUNTINGPERIOD') }}
+WITH source AS (
+
+    SELECT *
+    FROM {{ source('raw', 'ACCOUNTINGPERIOD') }}
+    {% if is_incremental() %}
+    WHERE "_FIVETRAN_SYNCED" > (SELECT MAX(SILVER_UPDATED_ON_TS_UTC) FROM {{ this }})
+    {% endif %}
+
 ),
 
-cleaned as (
-    select
-        id                                              as period_id,
-        nullif(trim(periodname), '')                    as period_name,
-        cast(startdate as date)                         as start_date,
-        cast(enddate as date)                           as end_date,
-        isyear                                          as is_year,
-        isquarter                                       as is_quarter,
-        isadjust                                        as is_adjust,
-        closed                                          as is_closed,
-        alllocked                                       as all_locked,
-        aplocked                                        as ap_locked,
-        arlocked                                        as ar_locked,
-        isposting                                       as is_posting,
-        isinactive                                      as is_inactive,
+cleaned AS (
 
-        -- Derived: fiscal year, quarter, month from start date
-        year(cast(startdate as date))                   as fiscal_year,
-        quarter(cast(startdate as date))                as fiscal_quarter,
-        month(cast(startdate as date))                  as fiscal_month,
+    SELECT *
+    FROM source
+    WHERE "ISINACTIVE" = FALSE
 
-        -- Derived: period type label
-        case
-            when isyear    = true then 'Year'
-            when isquarter = true then 'Quarter'
-            when isadjust  = true then 'Adjustment'
-            else 'Month'
-        end                                             as period_type,
+),
 
-        _fivetran_synced                                as fivetran_synced_at,
+renamed AS (
 
-        row_number() over (
-            partition by id
-            order by _fivetran_synced desc
-        )                                               as _row_num
+    SELECT
+        -- surrogate key
+        MD5(CAST(ID AS VARCHAR))                                        AS SURROGATE_KEY,
 
-    from source
-    where isinactive = false
+        -- primary key
+        ID                                                              AS PERIOD_ID,
+
+        -- attributes
+        NULLIF(TRIM("PERIODNAME"), '')                                  AS PERIOD_NAME,
+        CAST("STARTDATE" AS DATE)                                       AS START_DATE,
+        CAST("ENDDATE" AS DATE)                                         AS END_DATE,
+        "ISYEAR"                                                        AS IS_YEAR,
+        "ISQUARTER"                                                     AS IS_QUARTER,
+        "ISADJUST"                                                      AS IS_ADJUST,
+        CLOSED                                                          AS IS_CLOSED,
+        "ALLLOCKED"                                                     AS ALL_LOCKED,
+        "APLOCKED"                                                      AS AP_LOCKED,
+        "ARLOCKED"                                                      AS AR_LOCKED,
+        "ISPOSTING"                                                     AS IS_POSTING,
+        "ISINACTIVE"                                                    AS IS_INACTIVE,
+
+        -- derived fiscal fields
+        YEAR(CAST("STARTDATE" AS DATE))                                 AS FISCAL_YEAR,
+        QUARTER(CAST("STARTDATE" AS DATE))                              AS FISCAL_QUARTER,
+        MONTH(CAST("STARTDATE" AS DATE))                                AS FISCAL_MONTH,
+
+        -- derived period type
+        CASE
+            WHEN "ISYEAR"    = TRUE THEN 'Year'
+            WHEN "ISQUARTER" = TRUE THEN 'Quarter'
+            WHEN "ISADJUST"  = TRUE THEN 'Adjustment'
+            ELSE 'Month'
+        END                                                             AS PERIOD_TYPE,
+
+        "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
+
+    FROM cleaned
+
+),
+
+final AS (
+
+    SELECT
+        renamed.*,
+        {% if is_incremental() %}
+        COALESCE(
+            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} existing
+             WHERE existing.PERIOD_ID = renamed.PERIOD_ID),
+            CURRENT_TIMESTAMP()
+        )                                                               AS SILVER_CREATED_ON_TS_UTC,
+        {% else %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
+        {% endif %}
+        CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
+        CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
+
+    FROM renamed
+
 )
 
-select * exclude (_row_num)
-from cleaned
-where _row_num = 1
+SELECT * FROM final

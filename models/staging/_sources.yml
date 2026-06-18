@@ -12,9 +12,10 @@ sources:
       Bronze layer — raw NetSuite data delivered by Fivetran.
       All 15 source tables land here exactly as Fivetran synced them.
     loaded_at_field: _FIVETRAN_SYNCED
-    freshness:
-      warn_after:  {count: 30, period: hour}
-      error_after: {count: 48, period: hour}
+    config:
+      freshness:
+        warn_after:  {count: 30, period: hour}
+        error_after: {count: 48, period: hour}
     tables:
       - name: ACCOUNT
         description: "Raw Chart of Accounts from NetSuite."

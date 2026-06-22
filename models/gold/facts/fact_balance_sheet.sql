@@ -26,11 +26,9 @@
 }}
 
 WITH gl AS (
-
-    SELECT * FROM {{ ref('fact_gl_journal') }}
+    SELECT * FROM "BUI_BHANU_RAMIREDDY_DB"."GOLD"."fact_gl_journal"
     WHERE FINANCIAL_STATEMENT = 'Balance Sheet'
-      AND ELIMINATE = FALSE
-
+      AND COALESCE(ELIMINATE, FALSE) = FALSE   -- ← handles NULLs as non-eliminated
 ),
 
 period_lookup AS (

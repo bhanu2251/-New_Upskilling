@@ -38,7 +38,7 @@ cleaned AS (
 
     SELECT *
     FROM source
-    WHERE "ISINACTIVE" = FALSE
+   -- WHERE "ISINACTIVE" = FALSE
 
 ),
 

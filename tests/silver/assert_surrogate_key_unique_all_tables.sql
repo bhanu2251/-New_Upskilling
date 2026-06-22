@@ -1,9 +1,12 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
--- Test: SURROGATE_KEY is unique on every Silver table.
--- Returns rows where duplicates exist — test passes when 0 rows returned.
+-- Test    : SURROGATE_KEY is unique on every Silver table.
+-- Asserts : No duplicate SURROGATE_KEY values across all 15 Silver models.
+-- Returns : Rows where duplicates exist — test passes when 0 rows returned.
+-- Note    : QUALIFY dedup added to all reference tables in this update;
+--           this test validates that fix is working end-to-end.
 
 {% set silver_models = [
     'account', 'accountingperiod', 'classification',
@@ -15,9 +18,9 @@
 
 {% for model in silver_models %}
 SELECT
-    '{{ model }}'  AS silver_table,
+    '{{ model }}'  AS SILVER_TABLE,
     SURROGATE_KEY,
-    COUNT(*)       AS duplicate_count
+    COUNT(*)       AS DUPLICATE_COUNT
 FROM {{ ref(model) }}
 GROUP BY SURROGATE_KEY
 HAVING COUNT(*) > 1

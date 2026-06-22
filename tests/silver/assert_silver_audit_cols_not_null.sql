@@ -1,9 +1,10 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
--- Test: SILVER_CREATED_ON_TS_UTC and SILVER_UPDATED_ON_TS_UTC must never be NULL.
--- Returns rows if NULL audit timestamps exist — test passes when 0 rows returned.
+-- Test    : SILVER_CREATED_ON_TS_UTC and SILVER_UPDATED_ON_TS_UTC must never be NULL.
+-- Asserts : Audit timestamps populated for every row on every Silver table.
+-- Returns : Rows if NULL audit timestamps exist — test passes when 0 rows returned.
 
 {% set silver_models = [
     'account', 'accountingperiod', 'classification',
@@ -15,7 +16,7 @@
 
 {% for model in silver_models %}
 SELECT
-    '{{ model }}'                 AS silver_table,
+    '{{ model }}'           AS SILVER_TABLE,
     SURROGATE_KEY,
     SILVER_CREATED_ON_TS_UTC,
     SILVER_UPDATED_ON_TS_UTC

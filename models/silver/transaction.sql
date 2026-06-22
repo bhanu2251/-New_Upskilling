@@ -75,7 +75,7 @@ RENAMED AS (
 
         -- FIX: SUBSIDIARY is the transaction's own owning subsidiary
         -- TOSUBSIDIARY is the intercompany destination — kept separately below
-        "SUBSIDIARY"                                                      AS SUBSIDIARY_ID,
+        "SUBSIDIARY"                                                    AS SUBSIDIARY_ID,
 
         -- status (raw code + decoded from lookup)
         NULLIF(TRIM("STATUS"), '')                                      AS STATUS_CODE,

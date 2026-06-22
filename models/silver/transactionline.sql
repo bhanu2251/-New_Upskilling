@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,7 +17,8 @@
     Layer   : Silver
     Grain   : 1 row per transaction line (TRANSACTION + ID composite key)
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — MAINLINE=FALSE, TAXLINE=FALSE filters, CAST to NUMBER(38,2)
+    Cleaning: inline — MAINLINE=FALSE, TAXLINE=FALSE filters, CAST to NUMBER(38,2),
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED
     Source  : {{ source('raw', 'TRANSACTIONLINE') }}
     Notes   : MAINLINE=FALSE (no header summary lines) and TAXLINE=FALSE filters applied.
               Only lines from posted non-voided transactions flow through via
@@ -28,7 +29,7 @@
               ITEMTYPE double-quoted.
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'TRANSACTIONLINE') }}
@@ -41,23 +42,23 @@ WITH source AS (
 ),
 
 -- inner join ensures only lines from posted, non-voided transactions pass through
-posted_transactions AS (
+POSTED_TRANSACTIONS AS (
 
     SELECT TRANSACTION_ID
     FROM {{ ref('transaction') }}
 
 ),
 
-filtered AS (
+FILTERED AS (
 
-    SELECT s.*
-    FROM source s
-    INNER JOIN posted_transactions pt
-        ON s."TRANSACTION" = pt.TRANSACTION_ID
+    SELECT S.*
+    FROM SOURCE S
+    INNER JOIN POSTED_TRANSACTIONS PT
+        ON S."TRANSACTION" = PT.TRANSACTION_ID
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
         MD5(
@@ -95,7 +96,7 @@ renamed AS (
 
         "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
 
-    FROM filtered
+    FROM FILTERED
 
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY "TRANSACTION", ID
@@ -104,16 +105,16 @@ renamed AS (
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.TRANSACTION_ID = renamed.TRANSACTION_ID
-               AND existing.LINE_ID        = renamed.LINE_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.TRANSACTION_ID = RENAMED.TRANSACTION_ID
+               AND EXISTING.LINE_ID        = RENAMED.LINE_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -122,8 +123,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

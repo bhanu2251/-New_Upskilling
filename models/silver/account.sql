@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,14 +17,15 @@
     Layer   : Silver
     Grain   : 1 row per NetSuite account (unique ACCOUNT.ID), active accounts only
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, CAST on DATE, boolean filters
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, CAST on DATE, ISINACTIVE=FALSE filter,
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED
     Source  : {{ source('raw', 'ACCOUNT') }}
-    Notes   : ISINACTIVE = FALSE filter applied. Derived cols: FINANCIAL_STATEMENT,
-              PL_CATEGORY, BS_CATEGORY from ACCTTYPE classification logic.
+    Notes   : FIX — QUALIFY dedup added (was missing from all reference tables).
+              Derived cols: FINANCIAL_STATEMENT, PL_CATEGORY, BS_CATEGORY from ACCTTYPE.
               Reserved-word Bronze columns double-quoted throughout.
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'ACCOUNT') }}
@@ -34,15 +35,15 @@ WITH source AS (
 
 ),
 
-cleaned AS (
+CLEANED AS (
 
     SELECT *
-    FROM source
+    FROM SOURCE
     WHERE ISINACTIVE = FALSE
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
         -- surrogate key
@@ -100,19 +101,24 @@ renamed AS (
 
         "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
 
-    FROM cleaned
+    FROM CLEANED
+
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY ID
+        ORDER BY "_FIVETRAN_SYNCED" DESC
+    ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.ACCOUNT_ID = renamed.ACCOUNT_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.ACCOUNT_ID = RENAMED.ACCOUNT_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -121,8 +127,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

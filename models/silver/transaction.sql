@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -19,15 +19,18 @@
     Schema  : static — explicit column list from Silver LLD
     Cleaning: inline — filters VOID=FALSE, POSTING=TRUE, _FIVETRAN_DELETED=FALSE
               STATUS decoded via left join to transactionstatus
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED
     Source  : {{ source('raw', 'TRANSACTION') }}
-    Notes   : VOID, POSTING, _FIVETRAN_DELETED filters applied at source CTE.
-              DEDUP-1 via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED.
+    Notes   : FIX — SUBSIDIARY (not TOSUBSIDIARY) maps to SUBSIDIARY_ID.
+              TOSUBSIDIARY is the intercompany destination subsidiary — kept separately
+              as INTERCO_TO_SUBSIDIARY_ID.
+              VOID, POSTING, _FIVETRAN_DELETED filters applied at source CTE.
               TYPE, STATUS, ENTITY, CURRENCY, EMPLOYEE, TOSUBSIDIARY, TRANID,
               TRANDATE, RECORDTYPE, POSTINGPERIOD, EXCHANGERATE double-quoted.
               STATUS decoded from silver.transactionstatus via ref().
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'TRANSACTION') }}
@@ -40,7 +43,7 @@ WITH source AS (
 
 ),
 
-status_lookup AS (
+STATUS_LOOKUP AS (
 
     SELECT
         STATUS_NAME,
@@ -50,13 +53,13 @@ status_lookup AS (
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
-        MD5(CAST(t.ID AS VARCHAR))                                      AS SURROGATE_KEY,
+        MD5(CAST(T.ID AS VARCHAR))                                      AS SURROGATE_KEY,
 
         -- primary key
-        t.ID                                                            AS TRANSACTION_ID,
+        T.ID                                                            AS TRANSACTION_ID,
 
         -- identifiers
         NULLIF(TRIM("TRANID"), '')                                      AS TRANSACTION_REF,
@@ -69,12 +72,15 @@ renamed AS (
 
         -- foreign keys
         "ENTITY"                                                        AS ENTITY_ID,
-        "TOSUBSIDIARY"                                                  AS SUBSIDIARY_ID,
+
+        -- FIX: SUBSIDIARY is the transaction's own owning subsidiary
+        -- TOSUBSIDIARY is the intercompany destination — kept separately below
+        SUBSIDIARY                                                      AS SUBSIDIARY_ID,
 
         -- status (raw code + decoded from lookup)
         NULLIF(TRIM("STATUS"), '')                                      AS STATUS_CODE,
-        sl.STATUS_NAME                                                  AS STATUS_NAME,
-        sl.STATUS_FULL_NAME                                             AS STATUS_FULL_NAME,
+        SL.STATUS_NAME                                                  AS STATUS_NAME,
+        SL.STATUS_FULL_NAME                                             AS STATUS_FULL_NAME,
 
         -- currency and rate
         "CURRENCY"                                                      AS CURRENCY_ID,
@@ -94,35 +100,36 @@ renamed AS (
         "INTERCOTRANSACTION"                                            AS INTERCO_TRANSACTION_ID,
         NULLIF(TRIM("INTERCOSTATUS"), '')                               AS INTERCO_STATUS,
         "INTERCOADJ"                                                    AS IS_INTERCO_ADJ,
+        "TOSUBSIDIARY"                                                  AS INTERCO_TO_SUBSIDIARY_ID,
 
         -- reversal fields
         "ISREVERSAL"                                                    AS IS_REVERSAL,
         REVERSAL                                                        AS REVERSAL_TRANSACTION_ID,
         CAST("REVERSALDATE" AS DATE)                                    AS REVERSAL_DATE,
 
-        t."_FIVETRAN_SYNCED"                                            AS FIVETRAN_SYNCED_AT
+        T."_FIVETRAN_SYNCED"                                            AS FIVETRAN_SYNCED_AT
 
-    FROM source t
-    LEFT JOIN status_lookup sl
-        ON NULLIF(TRIM(t."STATUS"), '')  = sl.STATUS_NAME
-       AND NULLIF(TRIM(t."TYPE"), '')    = sl.TRANSACTION_TYPE
+    FROM SOURCE T
+    LEFT JOIN STATUS_LOOKUP SL
+        ON NULLIF(TRIM(T."STATUS"), '')  = SL.STATUS_NAME
+       AND NULLIF(TRIM(T."TYPE"), '')    = SL.TRANSACTION_TYPE
 
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY t.ID
-        ORDER BY t."_FIVETRAN_SYNCED" DESC
+        PARTITION BY T.ID
+        ORDER BY T."_FIVETRAN_SYNCED" DESC
     ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.TRANSACTION_ID = renamed.TRANSACTION_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.TRANSACTION_ID = RENAMED.TRANSACTION_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -131,8 +138,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,13 +17,15 @@
     Layer   : Silver
     Grain   : 1 row per fiscal period (unique ACCOUNTINGPERIOD.ID), active periods only
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — CAST(x AS DATE), boolean pass-through, derived fiscal fields
+    Cleaning: inline — CAST(x AS DATE), boolean pass-through, derived fiscal fields,
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED
     Source  : {{ source('raw', 'ACCOUNTINGPERIOD') }}
-    Notes   : ISINACTIVE = FALSE filter applied.
+    Notes   : FIX — QUALIFY dedup added (was missing from all reference tables).
+              ISINACTIVE=FALSE filter applied.
               Derived: FISCAL_YEAR, FISCAL_QUARTER, FISCAL_MONTH, PERIOD_TYPE.
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'ACCOUNTINGPERIOD') }}
@@ -33,15 +35,15 @@ WITH source AS (
 
 ),
 
-cleaned AS (
+CLEANED AS (
 
     SELECT *
-    FROM source
+    FROM SOURCE
     WHERE "ISINACTIVE" = FALSE
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
         -- surrogate key
@@ -79,19 +81,24 @@ renamed AS (
 
         "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
 
-    FROM cleaned
+    FROM CLEANED
+
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY ID
+        ORDER BY "_FIVETRAN_SYNCED" DESC
+    ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.PERIOD_ID = renamed.PERIOD_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.PERIOD_ID = RENAMED.PERIOD_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -100,8 +107,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

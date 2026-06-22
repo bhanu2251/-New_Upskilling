@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,7 +17,8 @@
     Layer   : Silver
     Grain   : 1 row per posted accounting line (TRANSACTION + TRANSACTIONLINE + ACCOUNTINGBOOK)
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — POSTING=TRUE filter, CAST to NUMBER, FX translation logic
+    Cleaning: inline — POSTING=TRUE filter, CAST to NUMBER, FX translation logic,
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED
     Source  : {{ source('raw', 'TRANSACTIONACCOUNTINGLINE') }}
     Notes   : POSTING=TRUE filter applied.
               Voided/non-posting transactions excluded via inner join to silver.transaction.
@@ -31,7 +32,7 @@
               NETAMOUNT, DEFERREVREC double-quoted.
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'TRANSACTIONACCOUNTINGLINE') }}
@@ -43,7 +44,7 @@ WITH source AS (
 ),
 
 -- inner join enforces void=false, posting=true from transaction header
-clean_transactions AS (
+CLEAN_TRANSACTIONS AS (
 
     SELECT
         TRANSACTION_ID,
@@ -59,7 +60,7 @@ clean_transactions AS (
 ),
 
 -- line-level context (department, class, location, item)
-clean_lines AS (
+CLEAN_LINES AS (
 
     SELECT
         TRANSACTION_ID,
@@ -75,13 +76,13 @@ clean_lines AS (
 ),
 
 -- account classification (accttype, cashflowrate, generalrate, financial_statement)
-clean_accounts AS (
+CLEAN_ACCOUNTS AS (
 
     SELECT
         ACCOUNT_ID,
         ACCOUNT_NUMBER,
         ACCOUNT_TYPE,
-        ACCOUNT_FULL_NAME   AS ACCOUNT_NAME,
+        ACCOUNT_FULL_NAME                                               AS ACCOUNT_NAME,
         FINANCIAL_STATEMENT,
         PL_CATEGORY,
         BS_CATEGORY,
@@ -92,7 +93,7 @@ clean_accounts AS (
 ),
 
 -- FX rates: period + from_subsidiary → USD (exclude elimination subsidiaries)
-fx_rates AS (
+FX_RATES AS (
 
     SELECT
         PERIOD_ID,
@@ -105,105 +106,105 @@ fx_rates AS (
 
 ),
 
-joined AS (
+JOINED AS (
 
     SELECT
-        tal."TRANSACTION"                                               AS TRANSACTION_ID,
-        tal."TRANSACTIONLINE"                                           AS LINE_ID,
-        tal."ACCOUNTINGBOOK"                                            AS ACCOUNTING_BOOK_ID,
-        tal."ACCOUNT"                                                   AS ACCOUNT_ID,
+        TAL."TRANSACTION"                                               AS TRANSACTION_ID,
+        TAL."TRANSACTIONLINE"                                           AS LINE_ID,
+        TAL."ACCOUNTINGBOOK"                                            AS ACCOUNTING_BOOK_ID,
+        TAL."ACCOUNT"                                                   AS ACCOUNT_ID,
 
         -- transaction header context
-        t.TRANSACTION_REF,
-        t.TRANSACTION_TYPE,
-        t.TRANSACTION_DATE,
-        t.POSTING_PERIOD_ID                                             AS PERIOD_ID,
-        t.SUBSIDIARY_ID,
-        t.ENTITY_ID,
-        t.CURRENCY_ID                                                   AS TRANSACTION_CURRENCY_ID,
+        T.TRANSACTION_REF,
+        T.TRANSACTION_TYPE,
+        T.TRANSACTION_DATE,
+        T.POSTING_PERIOD_ID                                             AS PERIOD_ID,
+        T.SUBSIDIARY_ID,
+        T.ENTITY_ID,
+        T.CURRENCY_ID                                                   AS TRANSACTION_CURRENCY_ID,
 
         -- line context
-        tl.DEPARTMENT_ID,
-        tl.CLASS_ID,
-        tl.LOCATION_ID,
-        tl.ITEM_ID,
-        tl.IS_COGS,
-        tl.ELIMINATE,
+        TL.DEPARTMENT_ID,
+        TL.CLASS_ID,
+        TL.LOCATION_ID,
+        TL.ITEM_ID,
+        TL.IS_COGS,
+        TL.ELIMINATE,
 
         -- account classification context
-        a.ACCOUNT_NUMBER,
-        a.ACCOUNT_TYPE,
-        a.ACCOUNT_NAME,
-        a.FINANCIAL_STATEMENT,
-        a.PL_CATEGORY,
-        a.BS_CATEGORY,
-        a.CASH_FLOW_RATE,
-        a.GENERAL_RATE,
+        A.ACCOUNT_NUMBER,
+        A.ACCOUNT_TYPE,
+        A.ACCOUNT_NAME,
+        A.FINANCIAL_STATEMENT,
+        A.PL_CATEGORY,
+        A.BS_CATEGORY,
+        A.CASH_FLOW_RATE,
+        A.GENERAL_RATE,
 
         -- debit / credit / net amounts (functional currency)
-        CAST(COALESCE(tal.DEBIT,       0) AS NUMBER(38,2))              AS DEBIT_AMOUNT,
-        CAST(COALESCE(tal.CREDIT,      0) AS NUMBER(38,2))              AS CREDIT_AMOUNT,
-        CAST(COALESCE(tal.AMOUNT,      0) AS NUMBER(38,2))              AS AMOUNT,
-        CAST(COALESCE(tal."NETAMOUNT", 0) AS NUMBER(38,2))              AS NET_AMOUNT,
-        CAST(COALESCE(tal.AMOUNT,      0) AS NUMBER(38,2))              AS FUNCTIONAL_AMOUNT,
+        CAST(COALESCE(TAL.DEBIT,       0) AS NUMBER(38,2))              AS DEBIT_AMOUNT,
+        CAST(COALESCE(TAL.CREDIT,      0) AS NUMBER(38,2))              AS CREDIT_AMOUNT,
+        CAST(COALESCE(TAL.AMOUNT,      0) AS NUMBER(38,2))              AS AMOUNT,
+        CAST(COALESCE(TAL."NETAMOUNT", 0) AS NUMBER(38,2))              AS NET_AMOUNT,
+        CAST(COALESCE(TAL.AMOUNT,      0) AS NUMBER(38,2))              AS FUNCTIONAL_AMOUNT,
 
         -- FX translation to USD using correct rate type per account classification
         CASE
-            WHEN a.FINANCIAL_STATEMENT = 'P&L'
-                THEN CAST(COALESCE(tal.AMOUNT, 0) AS NUMBER(38,2))
-                     * COALESCE(fx.AVERAGE_RATE,   1)
-            WHEN a.BS_CATEGORY IN ('Current Asset', 'Non-Current Asset',
+            WHEN A.FINANCIAL_STATEMENT = 'P&L'
+                THEN CAST(COALESCE(TAL.AMOUNT, 0) AS NUMBER(38,2))
+                     * COALESCE(FX.AVERAGE_RATE,   1)
+            WHEN A.BS_CATEGORY IN ('Current Asset', 'Non-Current Asset',
                                    'Current Liability', 'Non-Current Liability')
-                THEN CAST(COALESCE(tal.AMOUNT, 0) AS NUMBER(38,2))
-                     * COALESCE(fx.CURRENT_RATE,   1)
-            WHEN a.BS_CATEGORY = 'Equity'
-                THEN CAST(COALESCE(tal.AMOUNT, 0) AS NUMBER(38,2))
-                     * COALESCE(fx.HISTORICAL_RATE, 1)
-            ELSE CAST(COALESCE(tal.AMOUNT,   0) AS NUMBER(38,2))
-                 * COALESCE(fx.AVERAGE_RATE,   1)
+                THEN CAST(COALESCE(TAL.AMOUNT, 0) AS NUMBER(38,2))
+                     * COALESCE(FX.CURRENT_RATE,   1)
+            WHEN A.BS_CATEGORY = 'Equity'
+                THEN CAST(COALESCE(TAL.AMOUNT, 0) AS NUMBER(38,2))
+                     * COALESCE(FX.HISTORICAL_RATE, 1)
+            ELSE CAST(COALESCE(TAL.AMOUNT,   0) AS NUMBER(38,2))
+                 * COALESCE(FX.AVERAGE_RATE,   1)
         END                                                             AS REPORTING_AMOUNT_USD,
 
         -- FX rates applied (for auditability)
-        COALESCE(fx.AVERAGE_RATE,    1)                                 AS FX_AVERAGE_RATE,
-        COALESCE(fx.CURRENT_RATE,    1)                                 AS FX_CURRENT_RATE,
-        COALESCE(fx.HISTORICAL_RATE, 1)                                 AS FX_HISTORICAL_RATE,
+        COALESCE(FX.AVERAGE_RATE,    1)                                 AS FX_AVERAGE_RATE,
+        COALESCE(FX.CURRENT_RATE,    1)                                 AS FX_CURRENT_RATE,
+        COALESCE(FX.HISTORICAL_RATE, 1)                                 AS FX_HISTORICAL_RATE,
 
         -- flags
-        tal.POSTING                                                     AS IS_POSTING,
-        tal."DEFERREVREC"                                               AS IS_DEFERRED_REV_REC,
+        TAL.POSTING                                                     AS IS_POSTING,
+        TAL."DEFERREVREC"                                               AS IS_DEFERRED_REV_REC,
 
-        tal."_FIVETRAN_SYNCED"                                          AS FIVETRAN_SYNCED_AT
+        TAL."_FIVETRAN_SYNCED"                                          AS FIVETRAN_SYNCED_AT
 
-    FROM source tal
+    FROM SOURCE TAL
 
     -- only lines from posted, non-voided transactions
-    INNER JOIN clean_transactions t
-        ON tal."TRANSACTION" = t.TRANSACTION_ID
+    INNER JOIN CLEAN_TRANSACTIONS T
+        ON TAL."TRANSACTION" = T.TRANSACTION_ID
 
     -- department, class, location, item context
-    LEFT JOIN clean_lines tl
-        ON tal."TRANSACTION"     = tl.TRANSACTION_ID
-       AND tal."TRANSACTIONLINE" = tl.LINE_ID
+    LEFT JOIN CLEAN_LINES TL
+        ON TAL."TRANSACTION"     = TL.TRANSACTION_ID
+       AND TAL."TRANSACTIONLINE" = TL.LINE_ID
 
     -- account classification and FX rate type
-    LEFT JOIN clean_accounts a
-        ON tal."ACCOUNT" = a.ACCOUNT_ID
+    LEFT JOIN CLEAN_ACCOUNTS A
+        ON TAL."ACCOUNT" = A.ACCOUNT_ID
 
     -- FX rates: match period + subsidiary → USD
-    LEFT JOIN fx_rates fx
-        ON t.POSTING_PERIOD_ID = fx.PERIOD_ID
-       AND t.SUBSIDIARY_ID     = fx.FROM_SUBSIDIARY_ID
+    LEFT JOIN FX_RATES FX
+        ON T.POSTING_PERIOD_ID = FX.PERIOD_ID
+       AND T.SUBSIDIARY_ID     = FX.FROM_SUBSIDIARY_ID
 
-    WHERE tal."ACCOUNT" IS NOT NULL
+    WHERE TAL."ACCOUNT" IS NOT NULL
 
     QUALIFY ROW_NUMBER() OVER (
-        PARTITION BY tal."TRANSACTION", tal."TRANSACTIONLINE", tal."ACCOUNTINGBOOK"
-        ORDER BY tal."_FIVETRAN_SYNCED" DESC
+        PARTITION BY TAL."TRANSACTION", TAL."TRANSACTIONLINE", TAL."ACCOUNTINGBOOK"
+        ORDER BY TAL."_FIVETRAN_SYNCED" DESC
     ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
         -- surrogate key (composite)
@@ -213,15 +214,15 @@ final AS (
             CAST(ACCOUNTING_BOOK_ID  AS VARCHAR)
         )                                                               AS SURROGATE_KEY,
 
-        joined.*,
+        JOINED.*,
 
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.TRANSACTION_ID     = joined.TRANSACTION_ID
-               AND existing.LINE_ID            = joined.LINE_ID
-               AND existing.ACCOUNTING_BOOK_ID = joined.ACCOUNTING_BOOK_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.TRANSACTION_ID     = JOINED.TRANSACTION_ID
+               AND EXISTING.LINE_ID            = JOINED.LINE_ID
+               AND EXISTING.ACCOUNTING_BOOK_ID = JOINED.ACCOUNTING_BOOK_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -230,8 +231,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM joined
+    FROM JOINED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

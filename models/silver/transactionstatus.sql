@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,20 +17,22 @@
     Layer   : Silver
     Grain   : 1 row per transaction status code (unique TRANSACTION_STATUS_ID)
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — NULLIF(TRIM()) on VARCHAR
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR,
+              DEDUP via QUALIFY ROW_NUMBER() on natural key (no _FIVETRAN_SYNCED watermark)
     Source  : {{ source('raw', 'TRANSACTIONSTATUS') }}
-    Notes   : No ISINACTIVE or watermark column — full refresh only.
+    Notes   : FIX — QUALIFY dedup added (was missing; no watermark so full refresh always).
+              No ISINACTIVE or watermark column — full refresh only.
               All source columns double-quoted (underscore names conflict with reserved words).
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'TRANSACTIONSTATUS') }}
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
         MD5(CAST("TRANSACTION_STATUS_ID" AS VARCHAR))                   AS SURROGATE_KEY,
@@ -40,20 +42,26 @@ renamed AS (
         NULLIF(TRIM("TRANSACTION_TYPE"), '')                            AS TRANSACTION_TYPE,
         NULLIF(TRIM("TRAN_CUSTOM_TYPE_ID"), '')                         AS CUSTOM_TYPE_ID
 
-    FROM source
+    FROM SOURCE
+
+    -- dedup on natural key (no _FIVETRAN_SYNCED available on this lookup table)
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY "TRANSACTION_STATUS_ID"
+        ORDER BY "TRANSACTION_STATUS_ID"
+    ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         CURRENT_TIMESTAMP()                                             AS SILVER_CREATED_ON_TS_UTC,
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

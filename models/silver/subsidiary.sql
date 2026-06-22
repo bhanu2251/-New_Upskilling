@@ -1,5 +1,5 @@
 -- ============================================================
--- The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+-- The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 -- The content has been verified by the designated engineer.
 -- ============================================================
 {{
@@ -17,14 +17,17 @@
     Layer   : Silver
     Grain   : 1 row per subsidiary / legal entity (unique SUBSIDIARY.ID), active only
     Schema  : static — explicit column list from Silver LLD
-    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, boolean filter, derived IS_PARENT_ENTITY
+    Cleaning: inline — NULLIF(TRIM()) on VARCHAR, ISINACTIVE=FALSE filter restored,
+              DEDUP via QUALIFY ROW_NUMBER() DESC on _FIVETRAN_SYNCED,
+              derived IS_PARENT_ENTITY
     Source  : {{ source('raw', 'SUBSIDIARY') }}
-    Notes   : ISINACTIVE = FALSE filter.
+    Notes   : FIX — ISINACTIVE=FALSE filter was commented out; now restored.
+              FIX — QUALIFY dedup added (was missing from all reference tables).
               NAME, FULLNAME, LEGALNAME, CURRENCY, ISELIMINATION, ISINACTIVE,
               FISCALCALENDAR, INTERCOACCOUNT, FEDERALIDNUMBER double-quoted.
 #}
 
-WITH source AS (
+WITH SOURCE AS (
 
     SELECT *
     FROM {{ source('raw', 'SUBSIDIARY') }}
@@ -34,15 +37,15 @@ WITH source AS (
 
 ),
 
-cleaned AS (
+CLEANED AS (
 
     SELECT *
-    FROM source
-   -- WHERE "ISINACTIVE" = FALSE
+    FROM SOURCE
+    WHERE "ISINACTIVE" = FALSE
 
 ),
 
-renamed AS (
+RENAMED AS (
 
     SELECT
         MD5(CAST(ID AS VARCHAR))                                        AS SURROGATE_KEY,
@@ -64,19 +67,24 @@ renamed AS (
 
         "_FIVETRAN_SYNCED"                                              AS FIVETRAN_SYNCED_AT
 
-    FROM cleaned
+    FROM CLEANED
+
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY ID
+        ORDER BY "_FIVETRAN_SYNCED" DESC
+    ) = 1
 
 ),
 
-final AS (
+FINAL AS (
 
     SELECT
-        renamed.*,
+        RENAMED.*,
         {% if is_incremental() %}
         COALESCE(
-            (SELECT MIN(existing.SILVER_CREATED_ON_TS_UTC)
-             FROM {{ this }} existing
-             WHERE existing.SUBSIDIARY_ID = renamed.SUBSIDIARY_ID),
+            (SELECT MIN(EXISTING.SILVER_CREATED_ON_TS_UTC)
+             FROM {{ this }} EXISTING
+             WHERE EXISTING.SUBSIDIARY_ID = RENAMED.SUBSIDIARY_ID),
             CURRENT_TIMESTAMP()
         )                                                               AS SILVER_CREATED_ON_TS_UTC,
         {% else %}
@@ -85,8 +93,8 @@ final AS (
         CURRENT_TIMESTAMP()                                             AS SILVER_UPDATED_ON_TS_UTC,
         CAST(NULL AS TIMESTAMP_NTZ)                                     AS SILVER_DELETED_ON_TS_UTC
 
-    FROM renamed
+    FROM RENAMED
 
 )
 
-SELECT * FROM final
+SELECT * FROM FINAL

@@ -1,5 +1,5 @@
 # ============================================================
-# The output have been generated with the assistance of Claude at 2026-06-18T09:52:56Z UTC.
+# The output have been generated with the assistance of Claude at 2026-06-22T UTC.
 # The content has been verified by the designated engineer.
 # ============================================================
 version: 2
@@ -9,6 +9,7 @@ models:
   - name: account
     description: >
       Cleaned Chart of Accounts. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       ACCOUNT_TYPE determines financial statement classification (P&L vs Balance Sheet).
       CASH_FLOW_RATE drives Cash Flow Statement categorisation.
       GENERAL_RATE controls FX translation rate type.
@@ -39,6 +40,7 @@ models:
   - name: accountingperiod
     description: >
       Cleaned fiscal calendar. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       IS_POSTING=TRUE periods accept journal entries.
       IS_CLOSED=TRUE periods are locked against further adjustments.
       IS_ADJUST=TRUE flags year-end adjustment periods.
@@ -61,6 +63,7 @@ models:
   - name: classification
     description: >
       Cleaned business line / class segments. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       Used for P&L reporting by revenue stream within and across subsidiaries.
     columns:
       - name: SURROGATE_KEY
@@ -77,6 +80,7 @@ models:
   - name: consolidatedexchangerate
     description: >
       Cleaned period-level FX rates. _FIVETRAN_DELETED=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       AVERAGE_RATE → P&L translation.
       CURRENT_RATE → Balance Sheet assets/liabilities translation.
       HISTORICAL_RATE → equity translation.
@@ -104,6 +108,7 @@ models:
   - name: currency
     description: >
       Cleaned currency master. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       IS_BASE_CURRENCY identifies USD as the group reporting currency.
     columns:
       - name: SURROGATE_KEY
@@ -122,6 +127,7 @@ models:
   - name: department
     description: >
       Cleaned department hierarchy. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       Maps each GL line to a cost centre — Finance, Operations, Sales, Technology, G&A.
     columns:
       - name: SURROGATE_KEY
@@ -138,6 +144,7 @@ models:
   - name: employee
     description: >
       Cleaned employee master. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       Used to attribute employee-related GL entries to correct department and subsidiary.
     columns:
       - name: SURROGATE_KEY
@@ -155,6 +162,7 @@ models:
     description: >
       Unified counterparty master — customers, vendors, employees, and partners.
       ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       TYPE distinguishes entity categories.
     columns:
       - name: SURROGATE_KEY
@@ -171,6 +179,7 @@ models:
   - name: item
     description: >
       Cleaned product and service item master. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       Used for COGS analysis by product line.
     columns:
       - name: SURROGATE_KEY
@@ -187,6 +196,7 @@ models:
   - name: location
     description: >
       Cleaned location master. ISINACTIVE=FALSE filter applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       Source table is mixed-case 'Location' in RAW — handled by quoting in _sources.yml.
     columns:
       - name: SURROGATE_KEY
@@ -202,7 +212,8 @@ models:
 
   - name: subsidiary
     description: >
-      Cleaned legal entity hierarchy. ISINACTIVE=FALSE filter applied.
+      Cleaned legal entity hierarchy. ISINACTIVE=FALSE filter restored and applied.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
       PARENT defines the consolidation tree — all five portfolio companies roll up to PCP Holdings.
       IS_ELIMINATION flags the subsidiary used to net out intercompany transactions.
     columns:
@@ -222,6 +233,7 @@ models:
   - name: transactionstatus
     description: >
       Lookup table for transaction status codes. No watermark column — full refresh only.
+      QUALIFY dedup on TRANSACTION_STATUS_ID.
       Used to decode STATUS field on TRANSACTION.
     columns:
       - name: SURROGATE_KEY
@@ -238,7 +250,9 @@ models:
   - name: transaction
     description: >
       Cleaned transaction headers. VOID=FALSE, POSTING=TRUE, _FIVETRAN_DELETED=FALSE filters applied.
-      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+      QUALIFY dedup on ID ordered by _FIVETRAN_SYNCED DESC.
+      FIX: SUBSIDIARY_ID now sourced from SUBSIDIARY column (the transaction's owning subsidiary),
+      not TOSUBSIDIARY (intercompany destination). TOSUBSIDIARY preserved as INTERCO_TO_SUBSIDIARY_ID.
       STATUS decoded from silver.transactionstatus via LEFT JOIN.
       Foundation for all downstream GL work.
     columns:
@@ -255,7 +269,7 @@ models:
               config:
                 severity: warn
       - name: SUBSIDIARY_ID
-        description: "FK to subsidiary — sourced from TOSUBSIDIARY."
+        description: "FK to subsidiary — sourced from SUBSIDIARY (owning entity), not TOSUBSIDIARY."
         data_tests:
           - not_null:
               config:
@@ -265,6 +279,8 @@ models:
               field: SUBSIDIARY_ID
               config:
                 severity: warn
+      - name: INTERCO_TO_SUBSIDIARY_ID
+        description: "Intercompany destination subsidiary — sourced from TOSUBSIDIARY. NULL for non-intercompany transactions."
       - name: POSTING_PERIOD_ID
         description: "FK to accountingperiod."
         data_tests:
@@ -291,7 +307,7 @@ models:
     description: >
       Cleaned transaction lines. MAINLINE=FALSE and TAXLINE=FALSE filters applied.
       Only lines from posted non-voided transactions are included (inner join to silver.transaction).
-      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+      QUALIFY dedup on TRANSACTION + ID ordered by _FIVETRAN_SYNCED DESC.
     columns:
       - name: SURROGATE_KEY
         description: "MD5 hash of TRANSACTION_ID|LINE_ID — sole primary key."
@@ -318,7 +334,7 @@ models:
       Line context joined from silver.transactionline.
       Account classification joined from silver.account.
       FX translation: AVERAGERATE for P&L, CURRENTRATE for BS assets/liabilities, HISTORICALRATE for equity.
-      DEDUP-1 via QUALIFY ROW_NUMBER() on _FIVETRAN_SYNCED DESC.
+      QUALIFY dedup on TRANSACTION + TRANSACTIONLINE + ACCOUNTINGBOOK ordered by _FIVETRAN_SYNCED DESC.
     columns:
       - name: SURROGATE_KEY
         description: "MD5 hash of TRANSACTION_ID|LINE_ID|ACCOUNTING_BOOK_ID — sole primary key."
@@ -347,7 +363,7 @@ models:
               to: ref('accountingperiod')
               field: PERIOD_ID
       - name: SUBSIDIARY_ID
-        description: "FK to subsidiary — inherited from transaction."
+        description: "FK to subsidiary — inherited from transaction (correctly sourced from SUBSIDIARY)."
         data_tests:
           - not_null:
               config:
